@@ -2,7 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Play, Timer, RefreshCw, Trophy, Users, Clock, Settings, ChevronLeft, Crown, Plus, Minus, Edit, Check, X, History, ChevronDown, ChevronUp } from 'lucide-react';
 import { useGameRoom } from './hooks/useGameRoom';
 import { WaitingRoom } from './components/WaitingRoom';
-import type { GameRoom, Category, GameSettings } from './types';
+import { ScoreBoard } from './components/ScoreBoard';
+import type { GameRoom, Category, GameSettings, RoundHistory } from './types';
 
 type Round = {
   letter: string;
@@ -61,12 +62,10 @@ function App() {
   
   const { room, error, createRoom, joinRoom, leaveRoom, findRoomByCode, setPlayerReady, updateGameState, deleteRoom } = useGameRoom(roomCode);
 
-  // Sauvegarder l'historique dans le localStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(gameHistory));
   }, [gameHistory]);
 
-  // Gérer le changement de statut de la room
   useEffect(() => {
     if (room && room.status === 'playing' && gameState === 'waiting') {
       setCurrentGame([]);
@@ -81,7 +80,6 @@ function App() {
     }
   }, [room, room?.status, gameState, settings]);
 
-  // Nettoyer la room si elle est vide ou terminée
   useEffect(() => {
     if (room) {
       const shouldDelete = 
@@ -151,45 +149,87 @@ function App() {
     }
   };
 
+  const handleInputChange = (category: string, value: string) => {
+    setAnswers(prev => ({ ...prev, [category]: value }));
+  };
+
   const generateLetter = () => {
+    if (!room?.seed) return 'A';
+    
     const letters = 'ABCDEFGHIJLMNOPRSTV';
     const usedLetters = currentGame.map(round => round.letter);
+    
+    const hash = Array.from(room.seed + currentRound).reduce(
+      (acc, char) => char.charCodeAt(0) + ((acc << 5) - acc), 0
+    );
+    
+    let attempts = 0;
     let newLetter;
+    
     do {
-      newLetter = letters[Math.floor(Math.random() * letters.length)];
-    } while (usedLetters.includes(newLetter));
+      const index = Math.abs((hash + attempts) % letters.length);
+      newLetter = letters[index];
+      attempts++;
+    } while (usedLetters.includes(newLetter) && attempts < letters.length);
+    
     return newLetter;
   };
 
   const startGame = async () => {
     if (!room) return;
     
+    const seed = Math.random().toString(36).substring(2);
     const newLetter = generateLetter();
+    
+    const updatedPlayers = room.players.map(p => ({
+      ...p,
+      hasValidatedRound: false,
+      score: 0,
+      validWords: 0
+    }));
+    
     await updateGameState({
       status: 'playing',
       currentRound: 1,
       currentLetter: newLetter,
       timeLeft: settings.timeLimit,
-      answers: {}
+      answers: {},
+      seed,
+      roundHistory: [],
+      players: updatedPlayers
     });
   };
 
-  const handleInputChange = (category: string, value: string) => {
-    setAnswers(prev => ({ ...prev, [category]: value }));
-  };
-
-  const calculateScore = () => {
+  const calculateScore = (answers: Record<string, string>, letter: string) => {
     let roundScore = 0;
+    let validWords = 0;
+    
     Object.values(answers).forEach(answer => {
       if (answer.trim().toLowerCase().startsWith(letter.toLowerCase())) {
         roundScore += 10;
+        validWords++;
       }
     });
-    return roundScore;
+    
+    return { score: roundScore, validWords };
+  };
+
+  const validateRound = async () => {
+    if (!room) return;
+
+    const updatedPlayers = room.players.map(p => 
+      p.name === playerName ? { ...p, hasValidatedRound: true } : p
+    );
+
+    await updateGameState({
+      players: updatedPlayers
+    });
   };
 
   const endRound = async () => {
-    const roundScore = calculateScore();
+    if (!room) return;
+
+    const { score: roundScore, validWords } = calculateScore(answers, letter);
     const round: Round = {
       letter,
       answers: { ...answers },
@@ -199,6 +239,36 @@ function App() {
     const newCurrentGame = [...currentGame, round];
     setCurrentGame(newCurrentGame);
     
+    const roundHistory: RoundHistory = {
+      letter,
+      playerAnswers: {
+        [playerName]: {
+          answers: { ...answers },
+          validWords,
+          score: roundScore
+        }
+      }
+    };
+    
+    const updatedHistory = [...(room.roundHistory || []), roundHistory];
+    
+    const updatedPlayers = room.players.map(p => {
+      if (p.name === playerName) {
+        const currentScore = p.score || 0;
+        const currentValidWords = p.validWords || 0;
+        return {
+          ...p,
+          score: currentScore + roundScore,
+          validWords: currentValidWords + validWords,
+          hasValidatedRound: false
+        };
+      }
+      return {
+        ...p,
+        hasValidatedRound: false
+      };
+    });
+    
     if (currentRound < settings.rounds) {
       const newLetter = generateLetter();
       const nextRound = currentRound + 1;
@@ -207,7 +277,9 @@ function App() {
         currentRound: nextRound,
         currentLetter: newLetter,
         timeLeft: settings.timeLimit,
-        answers: {}
+        answers: {},
+        players: updatedPlayers,
+        roundHistory: updatedHistory
       });
       
       setCurrentRound(nextRound);
@@ -234,7 +306,9 @@ function App() {
         currentRound: currentRound,
         currentLetter: letter,
         timeLeft: 0,
-        answers: {}
+        answers: {},
+        players: updatedPlayers,
+        roundHistory: updatedHistory
       });
       
       setGameState('results');
@@ -282,10 +356,19 @@ function App() {
         setTimeLeft(prev => prev - 1);
       }, 1000);
     } else if (timeLeft === 0 && gameState === 'playing') {
-      endRound();
+      validateRound();
     }
     return () => clearInterval(timer);
   }, [gameState, timeLeft]);
+
+  useEffect(() => {
+    if (room && gameState === 'playing') {
+      const allPlayersValidated = room.players.every(p => p.hasValidatedRound);
+      if (allPlayersValidated) {
+        endRound();
+      }
+    }
+  }, [room?.players]);
 
   const renderMenu = () => (
     <div className="flex flex-col items-center justify-center h-screen space-y-8 bg-gradient-to-br from-indigo-900 to-purple-900 text-white p-4">
@@ -591,13 +674,15 @@ function App() {
               </div>
             </div>
           </div>
-          <button
-            onClick={endRound}
-            className="bg-red-500 hover:bg-red-600 px-8 py-4 rounded-lg flex items-center space-x-3 text-lg transition-colors duration-200"
-          >
-            <RefreshCw className="w-6 h-6" />
-            <span>Terminer la manche</span>
-          </button>
+          {!room?.players.find(p => p.name === playerName)?.hasValidatedRound && (
+            <button
+              onClick={validateRound}
+              className="bg-green-500 hover:bg-green-600 px-8 py-4 rounded-lg flex items-center space-x-3 text-lg transition-colors duration-200"
+            >
+              <Check className="w-6 h-6" />
+              <span>Valider mes réponses</span>
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-2 lg:grid-cols-3 gap-8">
@@ -613,57 +698,48 @@ function App() {
                 className="w-full px-6 py-4 bg-white/5 border-2 border-white/20 rounded-lg text-xl text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all duration-200"
                 placeholder={`Un ${category.label.toLowerCase()} avec ${letter}...`}
                 maxLength={50}
+                disabled={room?.players.find(p => p.name === playerName)?.hasValidatedRound}
               />
             </div>
           ))}
         </div>
+
+        {room && (
+          <div className="mt-8 bg-white/10 rounded-xl p-6">
+            <h3 className="text-xl font-medium mb-4">État des joueurs</h3>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              {room.players.map(player => (
+                <div
+                  key={player.id}
+                  className={`p-4 rounded-lg ${
+                    player.hasValidatedRound ? 'bg-green-500/20' : 'bg-white/5'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {player.isHost && <Crown className="w-4 h-4 text-yellow-400" />}
+                    <span>{player.name}</span>
+                  </div>
+                  <div className="text-sm mt-1">
+                    {player.hasValidatedRound ? 'A validé' : 'En cours...'}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 
   const renderResults = () => (
     <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-purple-900 text-white p-8">
-      <div className="max-w-4xl mx-auto">
-        <h2 className="text-4xl font-bold mb-8 flex items-center justify-center">
-          <Trophy className="w-10 h-10 mr-4 text-yellow-400" />
-          Résultats de la partie
-        </h2>
-
-        <div className="bg-white/10 rounded-xl p-6 mb-8">
-          <div className="text-center mb-6">
-            <div className="text-6xl font-bold text-yellow-400 mb-2">
-              {currentGame.reduce((sum, round) => sum + round.score, 0)} points
-            </div>
-            <div className="text-xl text-white/70">Score total</div>
-          </div>
-
-          <div className="space-y-6">
-            {currentGame.map((round, index) => (
-              <div key={index} className="bg-white/5 rounded-lg p-4">
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center">
-                    <div className="text-3xl font-bold mr-4">Lettre {round.letter}</div>
-                    <div className="text-xl text-yellow-400">{round.score} points</div>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                  {Object.entries(round.answers).map(([category, answer]) => {
-                    const categoryLabel = settings.categories.find(c => c.name === category)?.label;
-                    const isValid = answer.toLowerCase().startsWith(round.letter.toLowerCase());
-                    return (
-                      <div key={category} className="space-y-1">
-                        <div className="text-sm text-white/70">{categoryLabel}</div>
-                        <div className={`font-medium ${isValid ? 'text-green-400' : 'text-red-400'}`}>
-                          {answer || '-'}
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+      <div className="max-w-4xl mx-auto space-y-8">
+        {room && (
+          <ScoreBoard
+            players={room.players}
+            roundHistory={room.roundHistory || []}
+          />
+        )}
 
         <div className="flex gap-4">
           <button
@@ -674,7 +750,22 @@ function App() {
             Menu principal
           </button>
           <button
-            onClick={startGame}
+            onClick={() => {
+              if (room) {
+                setGameState('waiting');
+                const updatedPlayers = room.players.map(p => ({
+                  ...p,
+                  isReady: false,
+                  hasValidatedRound: false,
+                  score: 0,
+                  validWords: 0
+                }));
+                updateGameState({
+                  status: 'waiting',
+                  players: updatedPlayers
+                });
+              }
+            }}
             className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 px-6 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors duration-200"
           >
             <RefreshCw className="w-5 h-5" />
