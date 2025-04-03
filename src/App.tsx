@@ -30,6 +30,8 @@ const DEFAULT_CATEGORIES: Category[] = [
   { name: 'sport', label: 'Sport' },
 ];
 
+const STORAGE_KEY = 'petit-bac-history';
+
 function App() {
   const [gameState, setGameState] = useState<'menu' | 'settings' | 'playing' | 'waiting' | 'history' | 'results'>('menu');
   const [settings, setSettings] = useState<GameSettings>({
@@ -44,7 +46,10 @@ function App() {
   const [timeLeft, setTimeLeft] = useState(settings.timeLimit);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [score, setScore] = useState(0);
-  const [gameHistory, setGameHistory] = useState<GameHistory[]>([]);
+  const [gameHistory, setGameHistory] = useState<GameHistory[]>(() => {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved ? JSON.parse(saved) : [];
+  });
   const [currentGame, setCurrentGame] = useState<Round[]>([]);
   const [playerName, setPlayerName] = useState('');
   const [roomCode, setRoomCode] = useState('');
@@ -54,7 +59,40 @@ function App() {
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   
-  const { room, error, createRoom, joinRoom, leaveRoom, findRoomByCode, setPlayerReady, updateGameState } = useGameRoom(roomCode);
+  const { room, error, createRoom, joinRoom, leaveRoom, findRoomByCode, setPlayerReady, updateGameState, deleteRoom } = useGameRoom(roomCode);
+
+  // Sauvegarder l'historique dans le localStorage
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(gameHistory));
+  }, [gameHistory]);
+
+  // Gérer le changement de statut de la room
+  useEffect(() => {
+    if (room && room.status === 'playing' && gameState === 'waiting') {
+      setCurrentGame([]);
+      setCurrentRound(room.currentRound || 1);
+      setLetter(room.currentLetter || '');
+      setGameState('playing');
+      setTimeLeft(settings.timeLimit);
+      setAnswers({});
+      settings.categories.forEach(cat => {
+        setAnswers(prev => ({ ...prev, [cat.name]: '' }));
+      });
+    }
+  }, [room, room?.status, gameState, settings]);
+
+  // Nettoyer la room si elle est vide ou terminée
+  useEffect(() => {
+    if (room) {
+      const shouldDelete = 
+        room.players.length === 0 || 
+        (room.status === 'finished' && room.players.every(p => !p.isHost));
+      
+      if (shouldDelete) {
+        deleteRoom(room.code);
+      }
+    }
+  }, [room]);
 
   const handleCreateRoom = async () => {
     if (!playerName.trim()) {
@@ -134,16 +172,6 @@ function App() {
       timeLeft: settings.timeLimit,
       answers: {}
     });
-    
-    setCurrentGame([]);
-    setCurrentRound(1);
-    setLetter(newLetter);
-    setGameState('playing');
-    setTimeLeft(settings.timeLimit);
-    setAnswers({});
-    settings.categories.forEach(cat => {
-      setAnswers(prev => ({ ...prev, [cat.name]: '' }));
-    });
   };
 
   const handleInputChange = (category: string, value: string) => {
@@ -160,7 +188,7 @@ function App() {
     return roundScore;
   };
 
-  const endRound = () => {
+  const endRound = async () => {
     const roundScore = calculateScore();
     const round: Round = {
       letter,
@@ -168,26 +196,47 @@ function App() {
       score: roundScore
     };
     
-    setCurrentGame(prev => [...prev, round]);
+    const newCurrentGame = [...currentGame, round];
+    setCurrentGame(newCurrentGame);
     
     if (currentRound < settings.rounds) {
-      setCurrentRound(prev => prev + 1);
-      setLetter(generateLetter());
+      const newLetter = generateLetter();
+      const nextRound = currentRound + 1;
+      
+      await updateGameState({
+        currentRound: nextRound,
+        currentLetter: newLetter,
+        timeLeft: settings.timeLimit,
+        answers: {}
+      });
+      
+      setCurrentRound(nextRound);
+      setLetter(newLetter);
       setTimeLeft(settings.timeLimit);
       setAnswers({});
       settings.categories.forEach(cat => {
         setAnswers(prev => ({ ...prev, [cat.name]: '' }));
       });
     } else {
-      const totalScore = [...currentGame, round].reduce((sum, r) => sum + r.score, 0);
+      const totalScore = [...newCurrentGame].reduce((sum, r) => sum + r.score, 0);
       const gameRecord: GameHistory = {
         id: Date.now().toString(),
         date: new Date().toLocaleString(),
-        rounds: [...currentGame, round],
+        rounds: newCurrentGame,
         totalScore,
         settings: { ...settings }
       };
+      
       setGameHistory(prev => [gameRecord, ...prev]);
+      
+      await updateGameState({
+        status: 'finished',
+        currentRound: currentRound,
+        currentLetter: letter,
+        timeLeft: 0,
+        answers: {}
+      });
+      
       setGameState('results');
     }
   };
