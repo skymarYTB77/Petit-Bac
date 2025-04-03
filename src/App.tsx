@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { Play, Timer, RefreshCw, Trophy, Users, Clock, Settings, ChevronLeft, Crown, Plus, Minus, Edit, Check, X, History, ChevronDown, ChevronUp } from 'lucide-react';
+import { useGameRoom } from './hooks/useGameRoom';
+import { WaitingRoom } from './components/WaitingRoom';
+import type { GameRoom } from './types';
 
 type Category = {
   name: string;
@@ -301,13 +304,13 @@ function App() {
           <label className="block text-lg font-medium">Catégories</label>
           <div className="flex gap-4 mb-4">
             <button
-              onClick={() => toggleCategoryMode(false)}
+              onClick={() => setUseCustomCategories(false)}
               className={`flex-1 py-3 px-4 rounded-lg ${!useCustomCategories ? 'bg-indigo-600' : 'bg-white/10 hover:bg-white/20'}`}
             >
               Catégories par défaut
             </button>
             <button
-              onClick={() => toggleCategoryMode(true)}
+              onClick={() => setUseCustomCategories(true)}
               className={`flex-1 py-3 px-4 rounded-lg ${useCustomCategories ? 'bg-indigo-600' : 'bg-white/10 hover:bg-white/20'}`}
             >
               Catégories personnalisées
