@@ -23,6 +23,7 @@ export type GameRoom = {
   seed?: string;
   roundHistory?: RoundHistory[];
   roundEnding?: boolean;
+  bannedPlayers?: string[];
 };
 
 export type Category = {

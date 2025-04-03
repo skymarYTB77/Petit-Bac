@@ -60,7 +60,20 @@ function App() {
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
   const [isCreatingRoom, setIsCreatingRoom] = useState(false);
   
-  const { room, error, createRoom, joinRoom, leaveRoom, findRoomByCode, setPlayerReady, updateGameState, deleteRoom } = useGameRoom(roomCode);
+  const { 
+    room, 
+    error, 
+    createRoom, 
+    joinRoom, 
+    leaveRoom, 
+    findRoomByCode, 
+    setPlayerReady, 
+    updateGameState, 
+    deleteRoom,
+    kickPlayer,
+    banPlayer,
+    transferHost
+  } = useGameRoom(roomCode);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(gameHistory));
@@ -144,6 +157,30 @@ function App() {
   const handleReady = async () => {
     try {
       await setPlayerReady(playerName, true);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleKickPlayer = async (playerToKick: string) => {
+    try {
+      await kickPlayer(playerToKick);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleBanPlayer = async (playerToBan: string) => {
+    try {
+      await banPlayer(playerToBan);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleTransferHost = async (newHost: string) => {
+    try {
+      await transferHost(newHost);
     } catch (err: any) {
       alert(err.message);
     }
@@ -726,6 +763,7 @@ function App() {
               ))}
             </div>
           </div>
+        
         )}
       </div>
     </div>
@@ -859,6 +897,9 @@ function App() {
           onStart={startGame}
           onLeave={handleLeaveRoom}
           onReady={handleReady}
+          onKickPlayer={handleKickPlayer}
+          onBanPlayer={handleBanPlayer}
+          onTransferHost={handleTransferHost}
         />
       )}
       {gameState === 'playing' && renderGame()}

@@ -78,7 +78,8 @@ export function useGameRoom(roomCode: string | null) {
         settings,
         currentRound: 0,
         timeLeft: settings.timeLimit,
-        answers: {}
+        answers: {},
+        bannedPlayers: []
       };
 
       await setDoc(doc(db, 'games', code), newRoom);
@@ -100,6 +101,10 @@ export function useGameRoom(roomCode: string | null) {
 
     if (room.players.some(p => p.name === playerName)) {
       throw new Error('Ce nom est déjà utilisé dans le salon');
+    }
+
+    if (room.bannedPlayers?.includes(playerName)) {
+      throw new Error('Vous avez été banni de ce salon');
     }
 
     try {
@@ -148,6 +153,61 @@ export function useGameRoom(roomCode: string | null) {
     } catch (err) {
       console.error('Error leaving room:', err);
       throw new Error('Erreur lors de la déconnexion du salon');
+    }
+  };
+
+  const kickPlayer = async (playerName: string) => {
+    if (!room || !roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
+
+    try {
+      const remainingPlayers = room.players.filter(p => p.name !== playerName);
+      await updateDoc(doc(db, 'games', roomCode), {
+        players: remainingPlayers
+      });
+    } catch (err) {
+      console.error('Error kicking player:', err);
+      throw new Error('Erreur lors de l\'exclusion du joueur');
+    }
+  };
+
+  const banPlayer = async (playerName: string) => {
+    if (!room || !roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
+
+    try {
+      const remainingPlayers = room.players.filter(p => p.name !== playerName);
+      const bannedPlayers = [...(room.bannedPlayers || []), playerName];
+      await updateDoc(doc(db, 'games', roomCode), {
+        players: remainingPlayers,
+        bannedPlayers
+      });
+    } catch (err) {
+      console.error('Error banning player:', err);
+      throw new Error('Erreur lors du bannissement du joueur');
+    }
+  };
+
+  const transferHost = async (newHostName: string) => {
+    if (!room || !roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
+
+    try {
+      const updatedPlayers = room.players.map(p => ({
+        ...p,
+        isHost: p.name === newHostName
+      }));
+
+      await updateDoc(doc(db, 'games', roomCode), {
+        host: newHostName,
+        players: updatedPlayers
+      });
+    } catch (err) {
+      console.error('Error transferring host:', err);
+      throw new Error('Erreur lors du transfert du statut d\'hôte');
     }
   };
 
@@ -217,6 +277,9 @@ export function useGameRoom(roomCode: string | null) {
     createRoom,
     joinRoom,
     leaveRoom,
+    kickPlayer,
+    banPlayer,
+    transferHost,
     setPlayerReady,
     findRoomByCode,
     updateGameState,
