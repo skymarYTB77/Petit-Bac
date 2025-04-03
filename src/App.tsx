@@ -2,12 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Play, Timer, RefreshCw, Trophy, Users, Clock, Settings, ChevronLeft, Crown, Plus, Minus, Edit, Check, X, History, ChevronDown, ChevronUp } from 'lucide-react';
 import { useGameRoom } from './hooks/useGameRoom';
 import { WaitingRoom } from './components/WaitingRoom';
-import type { GameRoom } from './types';
-
-type Category = {
-  name: string;
-  label: string;
-};
+import type { GameRoom, Category, GameSettings } from './types';
 
 type Round = {
   letter: string;
@@ -23,14 +18,6 @@ type GameHistory = {
   settings: GameSettings;
 };
 
-type GameSettings = {
-  timeLimit: number;
-  maxPlayers: number;
-  rounds: number;
-  categories: Category[];
-  customCategories: Category[];
-};
-
 const DEFAULT_CATEGORIES: Category[] = [
   { name: 'pays', label: 'Pays' },
   { name: 'ville', label: 'Ville' },
@@ -44,7 +31,7 @@ const DEFAULT_CATEGORIES: Category[] = [
 ];
 
 function App() {
-  const [gameState, setGameState] = useState<'menu' | 'settings' | 'playing' | 'history' | 'results'>('menu');
+  const [gameState, setGameState] = useState<'menu' | 'settings' | 'playing' | 'waiting' | 'history' | 'results'>('menu');
   const [settings, setSettings] = useState<GameSettings>({
     timeLimit: 60,
     maxPlayers: 4,
@@ -65,6 +52,66 @@ function App() {
   const [isAddingCategory, setIsAddingCategory] = useState(false);
   const [useCustomCategories, setUseCustomCategories] = useState(false);
   const [expandedGameId, setExpandedGameId] = useState<string | null>(null);
+  const [isCreatingRoom, setIsCreatingRoom] = useState(false);
+  
+  const { room, error, createRoom, joinRoom, leaveRoom, findRoomByCode, setPlayerReady, updateGameState } = useGameRoom(roomCode);
+
+  const handleCreateRoom = async () => {
+    if (!playerName.trim()) {
+      alert('Veuillez entrer votre pseudo');
+      return;
+    }
+
+    setIsCreatingRoom(true);
+    try {
+      const code = await createRoom(playerName, settings);
+      if (code) {
+        setRoomCode(code);
+        setGameState('waiting');
+      }
+    } catch (err: any) {
+      alert(err.message);
+    } finally {
+      setIsCreatingRoom(false);
+    }
+  };
+
+  const handleJoinRoom = async () => {
+    if (!playerName.trim() || !roomCode.trim()) {
+      alert('Veuillez entrer votre pseudo et le code du salon');
+      return;
+    }
+
+    try {
+      const foundRoom = await findRoomByCode(roomCode);
+      if (foundRoom.players.length >= foundRoom.settings.maxPlayers) {
+        alert('Le salon est complet');
+        return;
+      }
+      await joinRoom(playerName);
+      setGameState('waiting');
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleLeaveRoom = async () => {
+    try {
+      await leaveRoom(playerName);
+      setRoomCode('');
+      setGameState('menu');
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
+
+  const handleReady = async () => {
+    try {
+      await setPlayerReady(playerName, true);
+    } catch (err: any) {
+      alert(err.message);
+    }
+  };
 
   const generateLetter = () => {
     const letters = 'ABCDEFGHIJLMNOPRSTV';
@@ -76,10 +123,21 @@ function App() {
     return newLetter;
   };
 
-  const startGame = () => {
+  const startGame = async () => {
+    if (!room) return;
+    
+    const newLetter = generateLetter();
+    await updateGameState({
+      status: 'playing',
+      currentRound: 1,
+      currentLetter: newLetter,
+      timeLeft: settings.timeLimit,
+      answers: {}
+    });
+    
     setCurrentGame([]);
     setCurrentRound(1);
-    setLetter(generateLetter());
+    setLetter(newLetter);
     setGameState('playing');
     setTimeLeft(settings.timeLimit);
     setAnswers({});
@@ -146,6 +204,28 @@ function App() {
     setSettings(prev => ({ ...prev, [setting]: newValue }));
   };
 
+  const addCustomCategory = () => {
+    if (!newCategory.name || !newCategory.label) {
+      alert('Veuillez remplir tous les champs');
+      return;
+    }
+    setSettings(prev => ({
+      ...prev,
+      customCategories: [...prev.customCategories, newCategory],
+      categories: [...prev.categories, newCategory]
+    }));
+    setNewCategory({ name: '', label: '' });
+    setIsAddingCategory(false);
+  };
+
+  const removeCustomCategory = (categoryName: string) => {
+    setSettings(prev => ({
+      ...prev,
+      customCategories: prev.customCategories.filter(c => c.name !== categoryName),
+      categories: prev.categories.filter(c => c.name !== categoryName)
+    }));
+  };
+
   useEffect(() => {
     let timer: NodeJS.Timeout;
     if (gameState === 'playing' && timeLeft > 0) {
@@ -172,6 +252,7 @@ function App() {
           value={playerName}
           onChange={(e) => setPlayerName(e.target.value)}
           className="w-full px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+          maxLength={20}
         />
 
         <div className="flex gap-4">
@@ -179,10 +260,14 @@ function App() {
             type="text"
             placeholder="Code de la salle"
             value={roomCode}
-            onChange={(e) => setRoomCode(e.target.value)}
+            onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
             className="flex-1 px-4 py-3 rounded-lg bg-white/10 border border-white/20 text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+            maxLength={6}
           />
-          <button className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg flex items-center gap-2">
+          <button 
+            onClick={handleJoinRoom}
+            className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 rounded-lg flex items-center gap-2 transition-colors duration-200"
+          >
             <Users className="w-5 h-5" />
             Rejoindre
           </button>
@@ -190,7 +275,7 @@ function App() {
 
         <button
           onClick={() => setGameState('settings')}
-          className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-8 py-4 rounded-lg text-xl font-semibold flex items-center justify-center space-x-3"
+          className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-8 py-4 rounded-lg text-xl font-semibold flex items-center justify-center space-x-3 transition-colors duration-200"
         >
           <Play className="w-6 h-6" />
           <span>Nouvelle Partie</span>
@@ -198,7 +283,7 @@ function App() {
 
         <button
           onClick={() => setGameState('history')}
-          className="w-full bg-white/10 hover:bg-white/20 px-8 py-4 rounded-lg text-lg font-semibold flex items-center justify-center space-x-3"
+          className="w-full bg-white/10 hover:bg-white/20 px-8 py-4 rounded-lg text-lg font-semibold flex items-center justify-center space-x-3 transition-colors duration-200"
         >
           <History className="w-6 h-6" />
           <span>Historique</span>
@@ -225,7 +310,9 @@ function App() {
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           <div className="bg-white/10 p-6 rounded-xl space-y-4">
-            <label className="block text-lg font-medium">Temps par manche</label>
+            <label className="block text-lg font-medium h-14 flex items-center">
+              Temps par manche
+            </label>
             <div className="flex items-center gap-4">
               <button
                 onClick={() => handleSettingChange('timeLimit', settings.timeLimit - 10)}
@@ -237,7 +324,7 @@ function App() {
                 type="text"
                 value={settings.timeLimit}
                 onChange={(e) => handleSettingChange('timeLimit', parseInt(e.target.value) || 60)}
-                className="w-20 px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-center"
+                className="w-24 px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-center"
               />
               <button
                 onClick={() => handleSettingChange('timeLimit', settings.timeLimit + 10)}
@@ -250,7 +337,9 @@ function App() {
           </div>
 
           <div className="bg-white/10 p-6 rounded-xl space-y-4">
-            <label className="block text-lg font-medium">Nombre de joueurs</label>
+            <label className="block text-lg font-medium h-14 flex items-center">
+              Nombre de joueurs
+            </label>
             <div className="flex items-center gap-4">
               <button
                 onClick={() => handleSettingChange('maxPlayers', settings.maxPlayers - 1)}
@@ -262,7 +351,7 @@ function App() {
                 type="text"
                 value={settings.maxPlayers}
                 onChange={(e) => handleSettingChange('maxPlayers', parseInt(e.target.value) || 1)}
-                className="w-20 px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-center"
+                className="w-24 px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-center"
               />
               <button
                 onClick={() => handleSettingChange('maxPlayers', settings.maxPlayers + 1)}
@@ -275,7 +364,9 @@ function App() {
           </div>
 
           <div className="bg-white/10 p-6 rounded-xl space-y-4">
-            <label className="block text-lg font-medium">Nombre de manches</label>
+            <label className="block text-lg font-medium h-14 flex items-center">
+              Nombre de manches
+            </label>
             <div className="flex items-center gap-4">
               <button
                 onClick={() => handleSettingChange('rounds', settings.rounds - 1)}
@@ -287,7 +378,7 @@ function App() {
                 type="text"
                 value={settings.rounds}
                 onChange={(e) => handleSettingChange('rounds', parseInt(e.target.value) || 1)}
-                className="w-20 px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-center"
+                className="w-24 px-4 py-2 rounded-lg bg-white/10 border border-white/20 text-white text-center"
               />
               <button
                 onClick={() => handleSettingChange('rounds', settings.rounds + 1)}
@@ -305,13 +396,13 @@ function App() {
           <div className="flex gap-4 mb-4">
             <button
               onClick={() => setUseCustomCategories(false)}
-              className={`flex-1 py-3 px-4 rounded-lg ${!useCustomCategories ? 'bg-indigo-600' : 'bg-white/10 hover:bg-white/20'}`}
+              className={`flex-1 py-3 px-4 rounded-lg transition-colors duration-200 ${!useCustomCategories ? 'bg-indigo-600' : 'bg-white/10 hover:bg-white/20'}`}
             >
               Catégories par défaut
             </button>
             <button
               onClick={() => setUseCustomCategories(true)}
-              className={`flex-1 py-3 px-4 rounded-lg ${useCustomCategories ? 'bg-indigo-600' : 'bg-white/10 hover:bg-white/20'}`}
+              className={`flex-1 py-3 px-4 rounded-lg transition-colors duration-200 ${useCustomCategories ? 'bg-indigo-600' : 'bg-white/10 hover:bg-white/20'}`}
             >
               Catégories personnalisées
             </button>
@@ -344,6 +435,7 @@ function App() {
                     value={newCategory.name}
                     onChange={(e) => setNewCategory(prev => ({ ...prev, name: e.target.value }))}
                     className="w-full px-4 py-2 rounded-lg bg-white/5 border border-white/20"
+                    maxLength={20}
                   />
                   <input
                     type="text"
@@ -351,18 +443,19 @@ function App() {
                     value={newCategory.label}
                     onChange={(e) => setNewCategory(prev => ({ ...prev, label: e.target.value }))}
                     className="w-full px-4 py-2 rounded-lg bg-white/5 border border-white/20"
+                    maxLength={30}
                   />
                   <div className="flex gap-2">
                     <button
                       onClick={addCustomCategory}
-                      className="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-700 flex items-center justify-center gap-2"
+                      className="flex-1 py-2 rounded-lg bg-green-600 hover:bg-green-700 flex items-center justify-center gap-2 transition-colors duration-200"
                     >
                       <Check className="w-4 h-4" />
                       Ajouter
                     </button>
                     <button
                       onClick={() => setIsAddingCategory(false)}
-                      className="flex-1 py-2 rounded-lg bg-red-600 hover:bg-red-700 flex items-center justify-center gap-2"
+                      className="flex-1 py-2 rounded-lg bg-red-600 hover:bg-red-700 flex items-center justify-center gap-2 transition-colors duration-200"
                     >
                       <X className="w-4 h-4" />
                       Annuler
@@ -372,7 +465,7 @@ function App() {
               ) : (
                 <button
                   onClick={() => setIsAddingCategory(true)}
-                  className="w-full py-3 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center gap-2"
+                  className="w-full py-3 rounded-lg bg-white/10 hover:bg-white/20 flex items-center justify-center gap-2 transition-colors duration-200"
                 >
                   <Plus className="w-5 h-5" />
                   Ajouter une catégorie
@@ -393,7 +486,7 @@ function App() {
                         : [...prev.categories, category],
                     }));
                   }}
-                  className={`py-3 px-4 rounded-lg text-left ${
+                  className={`py-3 px-4 rounded-lg text-left transition-colors duration-200 ${
                     settings.categories.some(c => c.name === category.name)
                       ? 'bg-indigo-600'
                       : 'bg-white/10 hover:bg-white/20'
@@ -407,25 +500,37 @@ function App() {
         </div>
 
         <button
-          onClick={startGame}
-          className="w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-8 py-4 rounded-lg text-xl font-semibold flex items-center justify-center space-x-3 mt-8"
+          onClick={handleCreateRoom}
+          disabled={isCreatingRoom}
+          className={`w-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 text-white px-8 py-4 rounded-lg text-xl font-semibold flex items-center justify-center space-x-3 transition-all duration-200 ${
+            isCreatingRoom ? 'opacity-75 cursor-not-allowed' : ''
+          }`}
         >
-          <Play className="w-6 h-6" />
-          <span>Lancer la partie</span>
+          {isCreatingRoom ? (
+            <>
+              <RefreshCw className="w-6 h-6 animate-spin" />
+              <span>Création en cours...</span>
+            </>
+          ) : (
+            <>
+              <Play className="w-6 h-6" />
+              <span>Créer la partie</span>
+            </>
+          )}
         </button>
       </div>
     </div>
   );
 
   const renderGame = () => (
-    <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-purple-900 text-white p-4">
-      <div className="max-w-6xl mx-auto">
+    <div className="min-h-screen bg-gradient-to-br from-indigo-900 to-purple-900 text-white p-8">
+      <div className="max-w-7xl mx-auto">
         <div className="flex justify-between items-center mb-8">
-          <div className="flex items-center space-x-4">
-            <div className="text-8xl font-bold bg-white/10 px-8 py-4 rounded-2xl">
+          <div className="flex items-center space-x-6">
+            <div className="text-8xl font-bold bg-white/10 px-10 py-6 rounded-2xl">
               {letter}
             </div>
-            <div className="space-y-2">
+            <div className="space-y-3">
               <div className="text-4xl font-bold flex items-center">
                 <Timer className="w-8 h-8 mr-3 text-red-400" />
                 <span className={timeLeft <= 10 ? 'text-red-400' : ''}>
@@ -439,25 +544,26 @@ function App() {
           </div>
           <button
             onClick={endRound}
-            className="bg-red-500 hover:bg-red-600 px-6 py-3 rounded-lg flex items-center space-x-2"
+            className="bg-red-500 hover:bg-red-600 px-8 py-4 rounded-lg flex items-center space-x-3 text-lg transition-colors duration-200"
           >
-            <RefreshCw className="w-5 h-5" />
+            <RefreshCw className="w-6 h-6" />
             <span>Terminer la manche</span>
           </button>
         </div>
 
-        <div className="grid grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-2 lg:grid-cols-3 gap-8">
           {settings.categories.map(category => (
-            <div key={category.name} className="bg-white/10 rounded-xl p-6 space-y-3">
-              <label className="block text-xl font-medium">
+            <div key={category.name} className="bg-white/10 rounded-xl p-8 space-y-4 min-h-[200px]">
+              <label className="block text-2xl font-medium">
                 {category.label}
               </label>
               <input
                 type="text"
                 value={answers[category.name] || ''}
                 onChange={(e) => handleInputChange(category.name, e.target.value)}
-                className="w-full px-4 py-3 bg-white/5 border border-white/20 rounded-lg text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-indigo-400"
+                className="w-full px-6 py-4 bg-white/5 border-2 border-white/20 rounded-lg text-xl text-white placeholder-white/50 focus:outline-none focus:ring-2 focus:ring-indigo-400 focus:border-transparent transition-all duration-200"
                 placeholder={`Un ${category.label.toLowerCase()} avec ${letter}...`}
+                maxLength={50}
               />
             </div>
           ))}
@@ -513,14 +619,14 @@ function App() {
         <div className="flex gap-4">
           <button
             onClick={() => setGameState('menu')}
-            className="flex-1 bg-white/10 hover:bg-white/20 px-6 py-3 rounded-lg flex items-center justify-center gap-2"
+            className="flex-1 bg-white/10 hover:bg-white/20 px-6 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors duration-200"
           >
             <ChevronLeft className="w-5 h-5" />
             Menu principal
           </button>
           <button
             onClick={startGame}
-            className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 px-6 py-3 rounded-lg flex items-center justify-center gap-2"
+            className="flex-1 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-700 hover:to-indigo-700 px-6 py-3 rounded-lg flex items-center justify-center gap-2 transition-colors duration-200"
           >
             <RefreshCw className="w-5 h-5" />
             Nouvelle partie
@@ -551,7 +657,7 @@ function App() {
             <div key={game.id} className="bg-white/10 rounded-xl overflow-hidden">
               <button
                 onClick={() => setExpandedGameId(expandedGameId === game.id ? null : game.id)}
-                className="w-full px-6 py-4 flex items-center justify-between hover:bg-white/5"
+                className="w-full px-6 py-4 flex items-center justify-between hover:bg-white/5 transition-colors duration-200"
               >
                 <div className="flex items-center gap-4">
                   <Trophy className="w-6 h-6 text-yellow-400" />
@@ -606,6 +712,15 @@ function App() {
     <>
       {gameState === 'menu' && renderMenu()}
       {gameState === 'settings' && renderSettings()}
+      {gameState === 'waiting' && room && (
+        <WaitingRoom
+          room={room}
+          playerName={playerName}
+          onStart={startGame}
+          onLeave={handleLeaveRoom}
+          onReady={handleReady}
+        />
+      )}
       {gameState === 'playing' && renderGame()}
       {gameState === 'history' && renderHistory()}
       {gameState === 'results' && renderResults()}

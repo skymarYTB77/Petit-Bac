@@ -1,6 +1,14 @@
 import { useEffect, useState } from 'react';
 import { db } from '../firebase';
-import { collection, doc, onSnapshot, setDoc, updateDoc, query, where, getDocs } from 'firebase/firestore';
+import { 
+  collection, 
+  doc, 
+  onSnapshot, 
+  setDoc, 
+  updateDoc, 
+  getDoc,
+  deleteDoc
+} from 'firebase/firestore';
 import type { GameRoom, Player } from '../types';
 
 export function useGameRoom(roomCode: string | null) {
@@ -8,13 +16,18 @@ export function useGameRoom(roomCode: string | null) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!roomCode) return;
+    if (!roomCode) {
+      setRoom(null);
+      setError(null);
+      return;
+    }
 
     const unsubscribe = onSnapshot(
-      doc(db, 'rooms', roomCode),
-      (doc) => {
-        if (doc.exists()) {
-          setRoom(doc.data() as GameRoom);
+      doc(db, 'games', roomCode),
+      (snapshot) => {
+        if (snapshot.exists()) {
+          const roomData = snapshot.data() as GameRoom;
+          setRoom(roomData);
           setError(null);
         } else {
           setRoom(null);
@@ -27,29 +40,48 @@ export function useGameRoom(roomCode: string | null) {
       }
     );
 
-    return () => unsubscribe();
+    return () => {
+      unsubscribe();
+      setRoom(null);
+      setError(null);
+    };
   }, [roomCode]);
 
-  const createRoom = async (hostName: string, settings: GameRoom['settings']) => {
+  const createRoom = async (hostName: string, settings: GameRoom['settings']): Promise<string> => {
+    if (!hostName.trim()) {
+      throw new Error('Le nom du joueur est requis');
+    }
+
     try {
-      const roomsRef = collection(db, 'rooms');
-      const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      let code: string;
+      let isUnique = false;
+      
+      while (!isUnique) {
+        code = Math.random().toString(36).substring(2, 8).toUpperCase();
+        const roomDoc = await getDoc(doc(db, 'games', code));
+        isUnique = !roomDoc.exists();
+      }
+
+      const playerId = Math.random().toString(36).substring(2);
       
       const newRoom: GameRoom = {
         id: code,
-        code,
+        code: code,
         host: hostName,
         players: [{
-          id: hostName,
+          id: playerId,
           name: hostName,
           isHost: true,
-          isReady: true
+          isReady: false
         }],
         status: 'waiting',
-        settings
+        settings,
+        currentRound: 0,
+        timeLeft: settings.timeLimit,
+        answers: {}
       };
 
-      await setDoc(doc(roomsRef, code), newRoom);
+      await setDoc(doc(db, 'games', code), newRoom);
       return code;
     } catch (err) {
       console.error('Error creating room:', err);
@@ -58,17 +90,28 @@ export function useGameRoom(roomCode: string | null) {
   };
 
   const joinRoom = async (playerName: string) => {
-    if (!room || !roomCode) return;
+    if (!room || !roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
+
+    if (!playerName.trim()) {
+      throw new Error('Le nom du joueur est requis');
+    }
+
+    if (room.players.some(p => p.name === playerName)) {
+      throw new Error('Ce nom est déjà utilisé dans le salon');
+    }
 
     try {
+      const playerId = Math.random().toString(36).substring(2);
       const newPlayer: Player = {
-        id: playerName,
+        id: playerId,
         name: playerName,
         isHost: false,
         isReady: false
       };
 
-      await updateDoc(doc(db, 'rooms', roomCode), {
+      await updateDoc(doc(db, 'games', roomCode), {
         players: [...room.players, newPlayer]
       });
     } catch (err) {
@@ -78,32 +121,84 @@ export function useGameRoom(roomCode: string | null) {
   };
 
   const leaveRoom = async (playerName: string) => {
-    if (!room || !roomCode) return;
+    if (!room || !roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
 
     try {
-      await updateDoc(doc(db, 'rooms', roomCode), {
-        players: room.players.filter(p => p.name !== playerName)
-      });
+      const remainingPlayers = room.players.filter(p => p.name !== playerName);
+      
+      if (remainingPlayers.length === 0) {
+        await deleteDoc(doc(db, 'games', roomCode));
+      } else {
+        const updates: Partial<GameRoom> = {
+          players: remainingPlayers
+        };
+        
+        if (room.host === playerName) {
+          const newHost = remainingPlayers[0];
+          updates.host = newHost.name;
+          updates.players = remainingPlayers.map(p => 
+            p.id === newHost.id ? { ...p, isHost: true } : p
+          );
+        }
+        
+        await updateDoc(doc(db, 'games', roomCode), updates);
+      }
     } catch (err) {
       console.error('Error leaving room:', err);
       throw new Error('Erreur lors de la déconnexion du salon');
     }
   };
 
-  const findRoomByCode = async (code: string) => {
+  const setPlayerReady = async (playerName: string, isReady: boolean) => {
+    if (!room || !roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
+
     try {
-      const roomsRef = collection(db, 'rooms');
-      const q = query(roomsRef, where('code', '==', code));
-      const querySnapshot = await getDocs(q);
+      const updatedPlayers = room.players.map(p =>
+        p.name === playerName ? { ...p, isReady } : p
+      );
       
-      if (querySnapshot.empty) {
+      await updateDoc(doc(db, 'games', roomCode), {
+        players: updatedPlayers
+      });
+    } catch (err) {
+      console.error('Error updating player ready status:', err);
+      throw new Error('Erreur lors de la mise à jour du statut');
+    }
+  };
+
+  const findRoomByCode = async (code: string) => {
+    if (!code.trim()) {
+      throw new Error('Le code du salon est requis');
+    }
+
+    try {
+      const roomDoc = await getDoc(doc(db, 'games', code));
+      
+      if (!roomDoc.exists()) {
         throw new Error('Salon introuvable');
       }
 
-      return querySnapshot.docs[0].data() as GameRoom;
+      return roomDoc.data() as GameRoom;
     } catch (err) {
       console.error('Error finding room:', err);
       throw new Error('Erreur lors de la recherche du salon');
+    }
+  };
+
+  const updateGameState = async (updates: Partial<GameRoom>) => {
+    if (!roomCode) {
+      throw new Error('Aucun salon sélectionné');
+    }
+
+    try {
+      await updateDoc(doc(db, 'games', roomCode), updates);
+    } catch (err) {
+      console.error('Error updating game state:', err);
+      throw new Error('Erreur lors de la mise à jour du jeu');
     }
   };
 
@@ -113,6 +208,8 @@ export function useGameRoom(roomCode: string | null) {
     createRoom,
     joinRoom,
     leaveRoom,
-    findRoomByCode
+    setPlayerReady,
+    findRoomByCode,
+    updateGameState
   };
 }
