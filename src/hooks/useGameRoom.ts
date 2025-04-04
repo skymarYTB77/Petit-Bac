@@ -7,7 +7,8 @@ import {
   setDoc, 
   updateDoc, 
   getDoc,
-  deleteDoc
+  deleteDoc,
+  runTransaction
 } from 'firebase/firestore';
 import type { GameRoom, Player } from '../types';
 
@@ -77,7 +78,8 @@ export function useGameRoom(roomCode: string | null) {
         status: 'waiting',
         settings,
         currentRound: 0,
-        timeLeft: settings.timeLimit,
+        startTime: null,
+        endTime: null,
         answers: {},
         bannedPlayers: []
       };
@@ -255,7 +257,26 @@ export function useGameRoom(roomCode: string | null) {
     }
 
     try {
-      await updateDoc(doc(db, 'games', roomCode), updates);
+      await runTransaction(db, async (transaction) => {
+        const roomRef = doc(db, 'games', roomCode);
+        const roomDoc = await transaction.get(roomRef);
+        
+        if (!roomDoc.exists()) {
+          throw new Error('Salon introuvable');
+        }
+
+        const currentRoom = roomDoc.data() as GameRoom;
+        
+        // Vérifier si tous les joueurs ont validé avant de passer à la manche suivante
+        if (updates.currentRound && updates.currentRound > (currentRoom.currentRound || 0)) {
+          const allPlayersValidated = currentRoom.players.every(p => p.hasValidatedRound);
+          if (!allPlayersValidated) {
+            throw new Error('Tous les joueurs n\'ont pas validé leurs réponses');
+          }
+        }
+
+        transaction.update(roomRef, updates);
+      });
     } catch (err) {
       console.error('Error updating game state:', err);
       throw new Error('Erreur lors de la mise à jour du jeu');

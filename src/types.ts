@@ -18,7 +18,8 @@ export type GameRoom = {
   settings: GameSettings;
   currentRound?: number;
   currentLetter?: string;
-  timeLeft?: number;
+  startTime?: number | null;
+  endTime?: number | null;
   answers?: Record<string, Record<string, string>>;
   seed?: string;
   roundHistory?: RoundHistory[];
